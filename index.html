@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Camera Object Name Speaker</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #10131a;
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 16px;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 520px;
+      background: #171b24;
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.35);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      text-align: center;
+    }
+
+    .subtitle {
+      margin: 0 0 16px;
+      color: #b7bfd4;
+      font-size: 14px;
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .camera-box {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 3 / 4;
+      background: #05070a;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid #2f3544;
+    }
+
+    video,
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .status {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 14px;
+      background: #222838;
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    .detected {
+      margin-top: 10px;
+      min-height: 56px;
+      padding: 14px;
+      border-radius: 16px;
+      background: #0f766e;
+      font-size: 26px;
+      font-weight: bold;
+      text-align: center;
+      letter-spacing: 0.3px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    button {
+      border: none;
+      border-radius: 14px;
+      padding: 13px 10px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      color: white;
+      background: #2563eb;
+    }
+
+    button.secondary {
+      background: #374151;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .small {
+      margin-top: 12px;
+      color: #aab3c8;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <h1>Camera Object Speaker</h1>
+    <p class="subtitle">Telefon kamerasi ko‘rgan narsalarni inglizcha nomi bilan aytadigan prototip.</p>
+
+    <div class="camera-box">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="status" id="status">Model yuklanmagan. “Start” tugmasini bosing.</div>
+    <div class="detected" id="detected">—</div>
+
+    <div class="controls">
+      <button id="startBtn">Start</button>
+      <button id="stopBtn" class="secondary" disabled>Stop</button>
+    </div>
+
+    <p class="small">
+      Eslatma: bu demo COCO-SSD modeli bilan ishlaydi. U person, car, chair, bottle, cup, phone, laptop kabi umumiy obyektlarni taniydi. Brauzer kamera ruxsatini so‘raydi.
+    </p>
+  </main>
+
+  <script>
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+    const detectedEl = document.getElementById("detected");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+
+    let model = null;
+    let stream = null;
+    let running = false;
+    let lastSpoken = "";
+    let lastSpeakTime = 0;
+
+    const minConfidence = 0.55;
+    const speakDelayMs = 2500;
+
+    async function loadModel() {
+      if (!model) {
+        statusEl.textContent = "Model yuklanmoqda... Internet tezligiga qarab biroz vaqt olishi mumkin.";
+        model = await cocoSsd.load();
+        statusEl.textContent = "Model tayyor. Kamera ishga tushirilmoqda...";
+      }
+    }
+
+    async function startCamera() {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "environment",
+          width: { ideal: 720 },
+          height: { ideal: 960 }
+        },
+        audio: false
+      });
+
+      video.srcObject = stream;
+
+      await new Promise(resolve => {
+        video.onloadedmetadata = resolve;
+      });
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
+    function speak(text) {
+      const now = Date.now();
+
+      if (text === lastSpoken && now - lastSpeakTime < speakDelayMs) return;
+
+      lastSpoken = text;
+      lastSpeakTime = now;
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "en-US";
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function drawPredictions(predictions) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 3;
+      ctx.font = "20px Arial";
+      ctx.textBaseline = "top";
+
+      predictions.forEach(prediction => {
+        const [x, y, width, height] = prediction.bbox;
+        const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+
+        ctx.strokeStyle = "#00e5ff";
+        ctx.fillStyle = "#00e5ff";
+        ctx.strokeRect(x, y, width, height);
+
+        const textWidth = ctx.measureText(label).width;
+        ctx.fillRect(x, y, textWidth + 10, 28);
+        ctx.fillStyle = "#000000";
+        ctx.fillText(label, x + 5, y + 4);
+      });
+    }
+
+    async function detectLoop() {
+      if (!running) return;
+
+      try {
+        const predictions = await model.detect(video);
+        const goodPredictions = predictions.filter(item => item.score >= minConfidence);
+
+        drawPredictions(goodPredictions);
+
+        if (goodPredictions.length > 0) {
+          goodPredictions.sort((a, b) => b.score - a.score);
+          const best = goodPredictions[0];
+          detectedEl.textContent = best.class;
+          statusEl.textContent = `Topildi: ${best.class}. Ishonchlilik: ${Math.round(best.score * 100)}%.`;
+          speak(best.class);
+        } else {
+          detectedEl.textContent = "—";
+          statusEl.textContent = "Aniq obyekt topilmadi. Kamerani obyektga yaqinroq tuting.";
+        }
+      } catch (error) {
+        statusEl.textContent = "Aniqlashda xatolik: " + error.message;
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+
+    async function startApp() {
+      try {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+
+        await loadModel();
+        await startCamera();
+
+        running = true;
+        statusEl.textContent = "Kamera ishlayapti. Obyektni ko‘rsating.";
+        detectLoop();
+      } catch (error) {
+        statusEl.textContent = "Xatolik: kamera ochilmadi yoki ruxsat berilmadi. " + error.message;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    }
+
+    function stopApp() {
+      running = false;
+      window.speechSynthesis.cancel();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      detectedEl.textContent = "—";
+      statusEl.textContent = "To‘xtatildi.";
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    startBtn.addEventListener("click", startApp);
+    stopBtn.addEventListener("click", stopApp);
+  </script>
+</body>
+</html>
